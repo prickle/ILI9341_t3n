@@ -84,6 +84,8 @@ ILI9341_t3n *ILI9341_t3n::_dmaActiveDisplay = 0;
 volatile uint8_t  	ILI9341_t3n::_dma_state = 0;  // Use pointer to this as a way to get back to object...
 volatile uint32_t	ILI9341_t3n::_dma_frame_count = 0;	// Can return a frame count...
 
+void (*handleDmaComplete)() = NULL;
+
 void ILI9341_t3n::dmaInterrupt(void) {
 	if (_dmaActiveDisplay)  {
 		_dmaActiveDisplay->process_dma_interrupt();
@@ -112,6 +114,7 @@ void ILI9341_t3n::process_dma_interrupt(void) {
 		endSPITransaction();
 		_dma_state &= ~ILI9341_DMA_ACTIVE;
 		_dmaActiveDisplay = 0;	// We don't have a display active any more... 
+		if (handleDmaComplete)(*handleDmaComplete)();
 
 	}
 #elif defined(__IMXRT1052__) || defined(__IMXRT1062__)  // Teensy 4.x
@@ -516,6 +519,76 @@ void ILI9341_t3n::dumpDMASettings() {
 #endif
 
 }
+
+//-------------------------------------------------------------------------------------------
+
+// Partial update of screen using DMA from Virtual Display Buffer
+// Suitable for LittleVGL display driver implementation
+// WIP Hack-up, Teensy 3.6 only, "Image" (size of *buf) to be less than 64K
+bool ILI9341_t3n::drawImageAsync(int x1, int y1, int x2, int y2, uint16_t *buf) 
+{
+	#ifdef ENABLE_ILI9341_FRAMEBUFFER
+
+	int len = (y2 - y1 + 1) * (x2 - x1 + 1) * 2;
+
+#ifdef DEBUG_ASYNC_LEDS
+	digitalWriteFast(DEBUG_PIN_1, HIGH);
+#endif
+	// Init DMA settings. 
+	initDMASettings();
+
+	// Don't start one if already active.
+	if (_dma_state & ILI9341_DMA_ACTIVE) {
+	#ifdef DEBUG_ASYNC_LEDS
+		digitalWriteFast(DEBUG_PIN_1, LOW);
+	#endif
+		return false;
+	}
+	
+#if defined(__MK66FX1M0__) 
+	//==========================================
+	// T3.6
+	//==========================================
+	// In this case we will only run through once...
+	_dmasettings[0].sourceBuffer(&buf[1], len - 2);
+	_dmasettings[0].replaceSettingsOnCompletion(_dmasettings[0]);
+	_dmasettings[0].interruptAtCompletion();
+	_dmasettings[0].disableOnCompletion();
+	_dma_state &= ~ILI9341_DMA_CONT;
+
+#ifdef DEBUG_ASYNC_UPDATE
+	dumpDMASettings();
+#endif
+	beginSPITransaction();
+
+	// Doing partial window. 
+	setAddr(x1, y1, x2, y2);
+	writecommand_cont(ILI9341_RAMWR);
+
+	// Write the first Word out before enter DMA as to setup the proper CS/DC/Continue flaugs
+	writedata16_cont(*buf);
+	// now lets start up the DMA
+//	volatile uint16_t  biter = _dmatx.TCD->BITER;
+	//DMA_CDNE_CDNE(_dmatx.channel);
+	_dmatx = _dmasettings[0];
+//	_dmatx.TCD->BITER = biter;
+	_dma_frame_count = 0;  // Set frame count back to zero. 
+	_dmaActiveDisplay = this;
+	_dma_state |= ILI9341_DMA_ACTIVE;
+	_pkinetisk_spi->RSER |= SPI_RSER_TFFF_DIRS |	 SPI_RSER_TFFF_RE;	 // Set DMA Interrupt Request Select and Enable register
+	_pkinetisk_spi->MCR &= ~SPI_MCR_HALT;  //Start transfers.
+	_dmatx.enable();
+#ifdef DEBUG_ASYNC_LEDS
+	digitalWriteFast(DEBUG_PIN_1, LOW);
+#endif
+#endif
+	return true;
+    #else
+    return false;     // no frame buffer so will never start... 
+	#endif
+
+}			 
+
 
 bool ILI9341_t3n::updateScreenAsync(bool update_cont)					// call to say update the screen now.
 {

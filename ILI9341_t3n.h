@@ -221,6 +221,9 @@ typedef struct {
 #define ILI9341_SPICLOCK 30000000
 #define ILI9341_SPICLOCK_READ 2000000
 #endif
+
+extern void (*handleDmaComplete)();
+
 class ILI9341_t3n : public Print
 {
   public:
@@ -398,6 +401,10 @@ class ILI9341_t3n : public Print
 	bool	updateScreenAsync(bool update_cont = false);	// call to say update the screen optinoally turn into continuous mode. 
 	void	waitUpdateAsyncComplete(void);
 	void	endUpdateAsync();			 // Turn of the continueous mode fla
+	bool	drawImageAsync(int x1, int y1, int x2, int y2, uint16_t *buf);	// call to say update the screen void	waitUpdateAsyncComplete(void);
+    inline void setHandleDmaComplete(void (*fptr)()) {
+        handleDmaComplete = fptr;
+    };
 	void	dumpDMASettings();
 	#ifdef ENABLE_ILI9341_FRAMEBUFFER
 	uint16_t *getFrameBuffer() {return _pfbtft;}
